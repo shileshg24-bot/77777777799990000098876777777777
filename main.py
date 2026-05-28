@@ -345,6 +345,7 @@ async def callback_handler(client: Client, callback_query):
     await callback_query.answer()
 
 # ==================== MESSAGE HANDLER ====================
+# FIXED: Using tilde ~ instead of minus -
 @bot.on_message(filters.text & filters.private & ~filters.command)
 async def handle_messages(client: Client, message: Message):
     user_id = message.from_user.id
