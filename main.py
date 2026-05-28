@@ -2,12 +2,17 @@ import os
 import re
 import asyncio
 import psutil
+import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from pyrogram.errors import SessionPasswordNeeded
+from pyrogram.errors import SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeExpired
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 from pytgcalls.exceptions import NoActiveGroupCall
+
+# Enable logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN = "8961167961:AAGHNNeisxhlu7WtgWE6sPUV1RL4kcv28H4"
 API_ID = 30898631
@@ -39,11 +44,10 @@ async def setup_bot_commands():
         BotCommand("mynumbers", "Show all login numbers"),
         BotCommand("joinvc", "Join voice chat"),
         BotCommand("logoutvc", "Logout all from VC"),
-        BotCommand("help", "Show help"),
-        BotCommand("cancel", "Cancel operation")
+        BotCommand("help", "Show help")
     ]
     await bot.set_bot_commands(commands)
-    print("✅ Commands menu configured")
+    logger.info("Commands menu configured")
 
 def get_main_keyboard():
     keyboard = [
@@ -82,15 +86,17 @@ async def resolve_chat_identifier(client: Client, identifier: str):
         chat = await client.get_chat(identifier)
         return chat.id
     except Exception as e:
-        print(f"Resolve error: {e}")
+        logger.error(f"Resolve error: {e}")
         return None
 
+# ==================== COMMAND HANDLERS ====================
 @bot.on_message(filters.command("start"))
 async def start_handler(client: Client, message: Message):
+    logger.info(f"Start command received from {message.from_user.id}")
     sys_info = await get_system_info()
     await message.reply_text(
         f"🤖 **VC BOT CONTROLLER**\n\n"
-        f"📌 **Commands:**\n"
+        f"📌 **Commands (always visible):**\n"
         f"• /login - Login multiple numbers\n"
         f"• /mynumbers - Show all numbers\n"
         f"• /joinvc - Join voice chat\n"
@@ -101,16 +107,17 @@ async def start_handler(client: Client, message: Message):
 
 @bot.on_message(filters.command("help"))
 async def help_handler(client: Client, message: Message):
-    help_text = """
-📚 **HELP GUIDE**
-
-/login - Login multiple numbers
-/mynumbers - Show all login numbers
-/joinvc - Join voice chat
-/logoutvc - Logout all from VC
-/cancel - Cancel operation
-"""
-    await message.reply_text(help_text, reply_markup=get_main_keyboard())
+    await message.reply_text(
+        "📚 **HELP GUIDE**\n\n"
+        "**1. /login** - Login multiple numbers\n"
+        "   Send: `+919876543210 +919876543211`\n\n"
+        "**2. /mynumbers** - Show all login numbers\n\n"
+        "**3. /joinvc** - Join voice chat\n"
+        "   Send channel/group link or ID\n\n"
+        "**4. /logoutvc** - Logout all from VC\n\n"
+        "**5. /cancel** - Cancel operation",
+        reply_markup=get_main_keyboard()
+    )
 
 @bot.on_message(filters.command("login"))
 async def login_command(client: Client, message: Message):
@@ -129,7 +136,7 @@ async def mynumbers_command(client: Client, message: Message):
     phones = user_phones_list.get(user_id, [])
     
     if not phones:
-        await message.reply_text("❌ No numbers logged in!\n\nUse /login to add numbers.", reply_markup=get_main_keyboard())
+        await message.reply_text("❌ No numbers logged in!\n\nUse /login to add numbers.")
         return
     
     status_text = "📋 **YOUR NUMBERS**\n\n"
@@ -166,7 +173,7 @@ async def joinvc_command(client: Client, message: Message):
     phones = user_phones_list.get(user_id, [])
     
     if not phones:
-        await message.reply_text("❌ No numbers logged in!\n\nUse /login first.", reply_markup=get_main_keyboard())
+        await message.reply_text("❌ No numbers logged in!\n\nUse /login first.")
         return
     
     active_phones = []
@@ -175,7 +182,7 @@ async def joinvc_command(client: Client, message: Message):
             active_phones.append(phone)
     
     if not active_phones:
-        await message.reply_text("❌ No active sessions!\n\nUse /login again.", reply_markup=get_main_keyboard())
+        await message.reply_text("❌ No active sessions!")
         return
     
     await message.reply_text(
@@ -192,7 +199,7 @@ async def logoutvc_command(client: Client, message: Message):
     phones = user_phones_list.get(user_id, [])
     
     if not phones:
-        await message.reply_text("❌ No numbers logged in!", reply_markup=get_main_keyboard())
+        await message.reply_text("❌ No numbers logged in!")
         return
     
     status_msg = await message.reply_text("🚪 Logging out all numbers from VC...")
@@ -209,7 +216,7 @@ async def logoutvc_command(client: Client, message: Message):
                 pass
         vc_active[phone] = False
     
-    await status_msg.edit_text(f"✅ Logged out {success_count} numbers from VC!", reply_markup=get_main_keyboard())
+    await status_msg.edit_text(f"✅ Logged out {success_count} numbers from VC!")
 
 @bot.on_message(filters.command("cancel"))
 async def cancel_command(client: Client, message: Message):
@@ -218,8 +225,9 @@ async def cancel_command(client: Client, message: Message):
         del user_states[user_id]
     if user_id in login_queue:
         del login_queue[user_id]
-    await message.reply_text("❌ Operation cancelled!", reply_markup=get_main_keyboard())
+    await message.reply_text("❌ Cancelled!", reply_markup=get_main_keyboard())
 
+# ==================== MULTI-NUMBER LOGIN ====================
 async def process_login_queue(user_id: int):
     queue = login_queue.get(user_id, [])
     if not queue:
@@ -232,7 +240,7 @@ async def process_login_queue(user_id: int):
         await bot.send_message(user_id, f"📱 Logging in: `{phone}`")
         
         try:
-            session_name = f"sessions/user_{user_id}_{phone.replace('+', '')}"
+            session_name = f"session_{user_id}_{phone.replace('+', '')}"
             client_obj = Client(session_name, api_id=API_ID, api_hash=API_HASH)
             await client_obj.connect()
             
@@ -256,8 +264,9 @@ async def process_login_queue(user_id: int):
             await bot.send_message(user_id, f"❌ Failed for `{phone}`: {str(e)[:50]}\nMoving to next...")
             continue
     
-    await bot.send_message(user_id, "✅ Login process completed!", reply_markup=get_main_keyboard())
+    await bot.send_message(user_id, "✅ Login process completed! Use /mynumbers to see all numbers.")
 
+# ==================== VC JOIN ====================
 async def join_single_number_to_vc(phone: str, chat_id: int, user_id: int, index: int, total: int):
     try:
         client_obj = user_clients.get(phone)
@@ -287,29 +296,24 @@ async def join_single_number_to_vc(phone: str, chat_id: int, user_id: int, index
         await bot.send_message(user_id, f"❌ [{index}/{total}] `{phone}`: {str(e)[:50]}")
         return False
 
+# ==================== CALLBACK HANDLERS ====================
 @bot.on_callback_query()
 async def callback_handler(client: Client, callback_query):
     user_id = callback_query.from_user.id
     data = callback_query.data
     
     if data == "login_numbers":
-        await callback_query.message.delete()
         await login_command(client, callback_query.message)
     elif data == "my_numbers":
-        await callback_query.message.delete()
         await mynumbers_command(client, callback_query.message)
     elif data == "join_vc":
-        await callback_query.message.delete()
         await joinvc_command(client, callback_query.message)
     elif data == "logout_all_vc":
-        await callback_query.message.delete()
         await logoutvc_command(client, callback_query.message)
     elif data == "help":
-        await callback_query.message.delete()
         await help_handler(client, callback_query.message)
     elif data == "back":
-        await callback_query.message.delete()
-        await start_handler(client, callback_query.message)
+        await callback_query.message.edit_text("🏠 Main Menu", reply_markup=get_main_keyboard())
     elif data.startswith("delete_"):
         phone = data.replace("delete_", "")
         phones = user_phones_list.get(user_id, [])
@@ -330,12 +334,17 @@ async def callback_handler(client: Client, callback_query):
     
     await callback_query.answer()
 
-# IMPORTANT: This line uses TILDE (~) not minus (-)
-@bot.on_message(filters.text & filters.private & ~filters.command)
+# ==================== MESSAGE HANDLER ====================
+@bot.on_message(filters.text & filters.private)
 async def handle_messages(client: Client, message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
+    logger.info(f"Message from {user_id}: {text[:50]}")
     
+    if text.startswith('/'):
+        return
+    
+    # Handle multi-number login
     if user_id in user_states and user_states[user_id].get('step') == 'waiting_numbers':
         phones = extract_phones_from_text(text)
         
@@ -344,14 +353,14 @@ async def handle_messages(client: Client, message: Message):
             return
         
         login_queue[user_id] = phones
-        if user_id not in user_phones_list:
-            user_phones_list[user_id] = []
+        user_phones_list[user_id] = user_phones_list.get(user_id, [])
         
         await message.reply_text(f"✅ Found {len(phones)} numbers!\nStarting login process...")
         del user_states[user_id]
         await process_login_queue(user_id)
         return
     
+    # Handle VC target
     if user_id in user_states and user_states[user_id].get('step') == 'waiting_vc_target':
         target = text
         phones = user_states[user_id].get('phones', [])
@@ -384,9 +393,10 @@ async def handle_messages(client: Client, message: Message):
                 success_count += 1
             await asyncio.sleep(2)
         
-        await status_msg.edit_text(f"✅ Joined: {success_count}/{len(phones)} numbers to VC!", reply_markup=get_main_keyboard())
+        await status_msg.edit_text(f"✅ Joined: {success_count}/{len(phones)} numbers to VC!")
         return
     
+    # OTP handling
     for key in list(user_states.keys()):
         if isinstance(key, str) and key.startswith(f"{user_id}_"):
             phone = key.replace(f"{user_id}_", "")
@@ -438,6 +448,7 @@ async def handle_messages(client: Client, message: Message):
                     await message.reply_text(f"🔒 2FA for `{phone}`\nSend your password:")
                     
                 except Exception as e:
+                    error = str(e)
                     remaining = 3 - state['attempts']
                     if remaining <= 0:
                         await message.reply_text(f"❌ Too many failed attempts for `{phone}`!\nSkipping...")
@@ -484,25 +495,34 @@ async def handle_messages(client: Client, message: Message):
                 
                 return
 
+# ==================== MAIN ====================
 async def main():
     print("\n" + "="*60)
     print("🤖 VC BOT CONTROLLER - MULTI NUMBER")
     print("="*60)
     
-    os.makedirs("sessions", exist_ok=True)
+    # First, delete any webhook
+    try:
+        await bot.delete_webhook()
+        print("✅ Webhook deleted")
+    except Exception as e:
+        print(f"Webhook deletion error: {e}")
     
     await bot.start()
     await setup_bot_commands()
     
     print("\n✅ Bot is running!")
     print("📱 Send /start on Telegram")
+    print("="*60)
     
+    # Keep bot alive
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
+    os.makedirs("sessions", exist_ok=True)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n❌ Bot stopped!")
+        print("\n🛑 Bot stopped")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"❌ Error: {e}")
